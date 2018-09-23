@@ -2,3 +2,6 @@
 *.gif
 *.pt
 *-ubyte
+.ipynb_checkpoints
+*.pyc
+*.dot
