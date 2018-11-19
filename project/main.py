@@ -148,8 +148,6 @@ def main():
                         transform=transforms.Compose([
                             transforms.Resize((224,112)),
                             transforms.CenterCrop((224,112)),
-                            #transforms.RandomHorizontalFlip(),
-                            #transforms.RandomRotation(20, resample=False, expand=False, center=None),
                             transforms.ToTensor(),
                             normalize,
                     ])),

@@ -549,38 +549,38 @@ def main():
     
     out_size = args.image_size // 16  
     kwargs = {'num_workers': 4, 'pin_memory': True} if args.cuda else {}
-    train_loader = torch.utils.data.DataLoader(
-        TripletImageLoader('../data', '', 'train/train_data.json', 
-                        'train', n_triplets=args.num_traintriplets,
-                        transform=transforms.Compose([
-                            transforms.Scale(args.image_size),
-                            transforms.CenterCrop(args.image_size),
-                            transforms.RandomHorizontalFlip(),
-                            transforms.ToTensor(),
-                            normalize,
-                    ])),
-        batch_size=args.train_batch_size, shuffle=True, **kwargs)
+    # train_loader = torch.utils.data.DataLoader(
+    #     TripletImageLoader('../data', '', 'train/train_data.json', 
+    #                     'train', n_triplets=args.num_traintriplets,
+    #                     transform=transforms.Compose([
+    #                         transforms.Scale(args.image_size),
+    #                         transforms.CenterCrop(args.image_size),
+    #                         transforms.RandomHorizontalFlip(),
+    #                         transforms.ToTensor(),
+    #                         normalize,
+    #                 ])),
+    #     batch_size=args.train_batch_size, shuffle=True, **kwargs)
 
-    test_loader = torch.utils.data.DataLoader(
-        TripletImageLoader('../data', '', 'test/test_data.json', 
-                'test', n_triplets=args.num_testtriplets,
-                        transform=transforms.Compose([
-                            transforms.Scale(args.image_size),
-                            transforms.CenterCrop(args.image_size),
-                            transforms.ToTensor(),
-                            normalize,
-                    ])),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-    val_loader = torch.utils.data.DataLoader(
-        TripletImageLoader('../data', '', 'val/val_data.json', 
-                        'val', n_triplets=args.num_valtriplets,
-                        transform=transforms.Compose([
-                            transforms.Scale(args.image_size),
-                            transforms.CenterCrop(args.image_size),
-                            transforms.ToTensor(),
-                            normalize,
-                    ])),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
+    # test_loader = torch.utils.data.DataLoader(
+    #     TripletImageLoader('../data', '', 'test/test_data.json', 
+    #             'test', n_triplets=args.num_testtriplets,
+    #                     transform=transforms.Compose([
+    #                         transforms.Scale(args.image_size),
+    #                         transforms.CenterCrop(args.image_size),
+    #                         transforms.ToTensor(),
+    #                         normalize,
+    #                 ])),
+    #     batch_size=args.batch_size, shuffle=True, **kwargs)
+    # val_loader = torch.utils.data.DataLoader(
+    #     TripletImageLoader('../data', '', 'val/val_data.json', 
+    #                     'val', n_triplets=args.num_valtriplets,
+    #                     transform=transforms.Compose([
+    #                         transforms.Scale(args.image_size),
+    #                         transforms.CenterCrop(args.image_size),
+    #                         transforms.ToTensor(),
+    #                         normalize,
+    #                 ])),
+    #     batch_size=args.batch_size, shuffle=True, **kwargs)
     
     encoder = _Encoder(ngpu,nc,nef,out_size,nz)
     encoder.apply(weights_init)
@@ -613,6 +613,15 @@ def main():
     test_loss_metric = []
     test_loss_VAE = []
     test_acc_metric = []
+
+    from torchviz import make_dot
+
+
+    inputs = torch.randn(1,3,224,224)
+    y = encoder(Variable(inputs))
+    gg = make_dot(y)
+
+    stop
 
 
     # optionally resume from a checkpoint

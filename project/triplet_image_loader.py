@@ -191,7 +191,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         # Mode Fake mode vs Real mode
         real_mode = decision(0.5)
 
-        real_mode = 0
+        #real_mode = 0
 
         # Real Mode
         if real_mode:
