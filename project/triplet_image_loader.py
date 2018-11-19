@@ -130,7 +130,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         self.loader = loader
         self.triplets = data
 
-        self.counter = -1
+        self.counter = 220
 
         # self.angle_mod = 10
         # self.scale_mod = 0.1
@@ -191,7 +191,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         # Mode Fake mode vs Real mode
         real_mode = decision(0.5)
 
-        #real_mode = 0
+        real_mode = 1
 
         # Real Mode
         if real_mode:

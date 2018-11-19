@@ -120,6 +120,64 @@ parser.set_defaults(visdom=False)
 
 best_acc = 0
 
+class _Encoder(nn.Module):
+
+    def __init__(self, ngpu,nc,nef,out_size,nz):
+        super(_Encoder, self).__init__()
+        self.ngpu = ngpu
+        self.nc = nc 
+        self.nef = nef
+        self.out_size = out_size
+        self.nz = nz
+        self.encoder = nn.Sequential(
+            nn.Conv2d(nc, nef, 4, 2, padding=1),
+            nn.BatchNorm2d(nef),
+            nn.LeakyReLU(0.2, True),
+
+            nn.Conv2d(nef, nef * 2, 4, 2, padding=1),
+            nn.BatchNorm2d(nef*2),
+            nn.LeakyReLU(0.2, True),
+
+
+            nn.Conv2d(nef * 2, nef * 4, 4, 2, padding=1),
+            nn.BatchNorm2d(nef*4),
+            nn.LeakyReLU(0.2, True),            
+
+            nn.Conv2d(nef * 4, nef * 8, 4, 2, padding=1),
+            nn.BatchNorm2d(nef*8),
+            nn.LeakyReLU(0.2, True),
+            
+        )
+        self.mean = nn.Linear(nef * 8 * out_size * out_size, nz)
+        self.logvar = nn.Linear(nef * 8 * out_size * out_size, nz)
+
+    #for reparametrization trick 
+    def sampler(self, mean, logvar):  
+        std = logvar.mul(0.5).exp_()
+        if args.cuda:
+            eps = torch.cuda.FloatTensor(std.size()).normal_()
+        else:
+            eps = torch.FloatTensor(std.size()).normal_()
+        eps = Variable(eps)
+        return eps.mul(std).add_(mean)
+
+    def forward(self, input):
+        batch_size = input.size(0)
+        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
+            hidden = nn.parallel.data_parallel(
+                self.encoder, input, range(self.ngpu))
+            hidden = hidden.view(batch_size, -1)
+            mean = nn.parallel.data_parallel(
+                self.mean, hidden, range(self.ngpu))
+            logvar = nn.parallel.data_parallel(
+                self.logvar, hidden, range(self.ngpu))
+        else:
+            hidden = self.encoder(input)
+            hidden = hidden.view(batch_size, -1)
+            mean, logvar = self.mean(hidden), self.logvar(hidden)
+        latent_z = self.sampler(mean, logvar)
+        return latent_z,mean,logvar
+
 def main():
     global args, best_acc
     global  log_interval
