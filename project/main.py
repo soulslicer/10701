@@ -15,6 +15,7 @@ import torch.backends.cudnn as cudnn
 from triplet_image_loader import TripletImageLoader
 import scipy.io as sio
 import time
+import cv2
 
 ################################################
 # insert this to the top of your scripts (usually main.py)
@@ -81,11 +82,11 @@ import numpy as np
 
 # that can be set while running the script from the terminal.
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--train_batch_size', type=int, default=4, metavar='N',
+parser.add_argument('--train_batch_size', type=int, default=32, metavar='N',
                     help='input batch size for training (default: 64)')
 parser.add_argument('--batch_size', type=int, default=1, metavar='N',
                     help='input batch size for testing (default: 64)')
-parser.add_argument('--epochs', type=int, default=200, metavar='N',
+parser.add_argument('--epochs', type=int, default=20000, metavar='N',
                     help='number of epochs to train (default: 200)')
 parser.add_argument('--start_epoch', type=int, default=1, metavar='N',
                     help='number of start epoch (default: 1)')
@@ -132,14 +133,14 @@ parser.add_argument('--visdom', dest='visdom', action='store_true',
 parser.add_argument('--image_size', type=int, default=224,  
                     help='height/width length of the input images, default=64')
 
-parser.add_argument('--ndf', type=int, default=32,
+parser.add_argument('--ndf', type=int, default=64,
                     help='number of output channels for the first decoder layer, default=32')
 
-parser.add_argument('--nef', type=int, default=32,
+parser.add_argument('--nef', type=int, default=64,
                     help='number of output channels for the first encoder layer, default=32')
 
 #same as dim_embed
-parser.add_argument('--nz', type=int, default=128,
+parser.add_argument('--nz', type=int, default=256,
                     help='size of the latent vector z, default=64')
 parser.add_argument('--ngpu', type=int, default=1,
                     help='number of GPUs to use')
@@ -368,6 +369,33 @@ class _Decoder(nn.Module):
             output = self.decoder_conv(hidden)
         return output
 
+#loss functions
+mse = nn.MSELoss().cuda()
+kld_criterion = nn.KLDivLoss()
+
+#reconstrunction loss
+def fpl_criterion(recon_features, targets):
+    fpl = 0
+    for f, target in zip(recon_features, targets):
+        fpl += mse(f, target.detach()) 
+    return fpl
+def loss_function(recon_x,x,mu,logvar,descriptor):
+    KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+    KLD = torch.sum(KLD_element).mul_(-0.5)
+
+    target_feature = descriptor(x)
+    recon_features = descriptor(recon_x)
+    FPL = fpl_criterion(recon_features, target_feature)
+
+    return KLD+0.5*FPL
+
+def loss_function(recon_x,x,mu,logvar, kld=False):
+    FPL = mse(recon_x, x.detach())
+    if kld:
+        KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+        KLD = torch.sum(KLD_element).mul_(-0.5)
+        return KLD+0.5*FPL
+    return FPL
 
 def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
     losses_metric = AverageMeter()
@@ -381,6 +409,7 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
     for batch_idx, (anchor_out, pos_out, neg_out, anchor_in, pos_in, neg_in) in enumerate(train_loader):
         #print("Load Data")
         #continue
+        #print(batch_idx)
 
         # Load into GPU
         anchor_out_var, pos_out_var, neg_out_var = Variable(anchor_out.cuda()), Variable(pos_out.cuda()), Variable(neg_out.cuda())
@@ -388,16 +417,6 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
 
         # Compute Encoder
         latent_x,mean_x,logvar_x,latent_y,mean_y,logvar_y,latent_z,mean_z,logvar_z,dist_a, dist_b = tnet(anchor_in_var, pos_in_var, neg_in_var)
-        
-        reconstructed_x = decoder(latent_x)
-        reconstructed_y = decoder(latent_y)
-        reconstructed_z = decoder(latent_z)
-
-        # min(reconstructed_x - reconstructed_y)
-        # min(reconstructed_y - pos_out_var)
-        # min(reconstructed_z - neg_in_var)
-        #print(reconstructed_x.shape)
-
 
         # (Apply Triplet loss) 1 means, dista should be larger than distb
         target = torch.FloatTensor(dist_a.size()).fill_(1)
@@ -406,13 +425,25 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
         loss_triplet = criterion(dist_a, dist_b, target)
         loss_embedd = mean_x.norm(2) + mean_y.norm(2) + mean_z.norm(2)
 
+        # Compute Decoder        
+        reconstructed_x = decoder(latent_x)
+        reconstructed_y = decoder(latent_y)
+        reconstructed_z = decoder(latent_z)
+
+        # min(reconstructed_x - reconstructed_y)
+        # min(reconstructed_y - pos_out_var)
+        # min(reconstructed_z - neg_in_var)
+        #print(reconstructed_x.shape)
+        loss_vae = loss_function(reconstructed_x, reconstructed_y, mean_y, logvar_y, False) 
+        loss_vae += loss_function(reconstructed_y, pos_out_var, mean_y, logvar_y, False)  
+        loss_vae += loss_function(reconstructed_z, neg_out_var, mean_z, logvar_z, False)    
+        loss_vae = loss_vae/(1*len(anchor_in))
+
         # Loss Combine
-        loss = args.triplet_loss*loss_triplet + args.embed_loss*loss_embedd 
-        # measure accuracy and record loss
+        loss = args.triplet_loss*loss_triplet + args.embed_loss*loss_embedd + args.vae_loss*loss_vae
         acc = accuracy(dist_a, dist_b)
-        #print(acc)
         losses_metric.update(loss_triplet.item(), anchor_in.size(0))
-        #losses_VAE.update(loss_vae.data[0], data1.size(0))
+        losses_VAE.update(loss_vae.item(), anchor_in.size(0))
         accs.update(acc, anchor_in.size(0))
         emb_norms.update(loss_embedd.item()/3, anchor_in.size(0))
 
@@ -427,15 +458,49 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
                   'Metric Acc: {:.2f}% ({:.2f}%) \t'
                   'Emb_Norm: {:.2f} ({:.2f})'.format(
                 epoch, batch_idx * len(anchor_in), len(train_loader.dataset),
-                #losses_VAE.val, losses_VAE.avg,
-                0,0,
+                losses_VAE.val, losses_VAE.avg,
+                #0,0,
                 losses_metric.val, losses_metric.avg, 
                 100. * accs.val, 100. * accs.avg, emb_norms.val, emb_norms.avg))
 
             train_loss_metric.append(losses_metric.val)
-            #train_loss_VAE.append(losses_VAE.val)
+            train_loss_VAE.append(losses_VAE.val)
             train_loss_VAE.append(0)
             train_acc_metric.append(accs.val)
+
+def test(train_loader, tnet, decoder, criterion, optimizer, epoch):
+    tnet.eval()
+
+    for batch_idx, (anchor_out, pos_out, neg_out, anchor_in, pos_in, neg_in) in enumerate(train_loader):
+        #print("Load Data")
+        #continue
+        #print(batch_idx)
+
+        # Load into GPU
+        anchor_out_var, pos_out_var, neg_out_var = Variable(anchor_out.cuda()), Variable(pos_out.cuda()), Variable(neg_out.cuda())
+        anchor_in_var, pos_in_var, neg_in_var = Variable(anchor_in.cuda()), Variable(pos_in.cuda()), Variable(neg_in.cuda())
+
+        # Compute Encoder
+        latent_x,mean_x,logvar_x,latent_y,mean_y,logvar_y,latent_z,mean_z,logvar_z,dist_a, dist_b = tnet(anchor_in_var, pos_in_var, neg_in_var)
+
+        # (Apply Triplet loss) 1 means, dista should be larger than distb
+        target = torch.FloatTensor(dist_a.size()).fill_(1)
+        target = target.cuda()
+        target = Variable(target)
+        loss_triplet = criterion(dist_a, dist_b, target)
+        loss_embedd = mean_x.norm(2) + mean_y.norm(2) + mean_z.norm(2)
+
+        # Compute Decoder        
+        reconstructed_x = decoder(latent_x)
+        reconstructed_y = decoder(latent_y)
+        reconstructed_z = decoder(latent_z)
+
+        true_array = neg_out.cpu().numpy()
+        recon_array = reconstructed_z.data.cpu().numpy()
+        cv2.imshow("True", true_array[0,0,:,:])
+        cv2.imshow("Recon", recon_array[0,0,:,:])
+        cv2.waitKey(15)
+
         
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """Saves checkpoint to disk"""
@@ -526,12 +591,12 @@ def main():
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     # Loss Functions and Params
-    criterion = torch.nn.MarginRankingLoss(margin = args.margin)
+    criterion = torch.nn.MarginRankingLoss(margin = args.margin).cuda()
     parameters = list(tnet.parameters()) + list(decoder.parameters())
     optimizer = optim.Adam(parameters, lr=args.lr, betas=(args.beta1, args.beta2))
 
     # Half points
-    half_points = [50, 100, 150]
+    half_points = [5000, 10000]
 
     for epoch in range(args.start_epoch, args.epochs + 1):
         # Half the LR based on above interval
@@ -545,7 +610,8 @@ def main():
         train(train_loader, tnet, decoder, criterion, optimizer, epoch)
 
         # Saving
-        if epoch % 100:
+        if epoch % 500:
+            print("SAVING")
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': tnet.state_dict(),
@@ -559,6 +625,10 @@ def main():
                 'test_loss_VAE':test_loss_VAE,
                 'test_acc_metric':test_acc_metric,
             }, False)
+
+            # Visualize
+            test(train_loader, tnet, decoder, criterion, optimizer, epoch)
+
 
     print("OK")
 
