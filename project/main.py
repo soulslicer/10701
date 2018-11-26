@@ -14,6 +14,7 @@ from torch.autograd import Variable
 import torch.backends.cudnn as cudnn
 from triplet_image_loader import TripletImageLoader
 import scipy.io as sio
+import time
 
 ################################################
 # insert this to the top of your scripts (usually main.py)
@@ -27,6 +28,26 @@ warnings.showwarning = warn_with_traceback; warnings.simplefilter('always', User
 torch.utils.backcompat.broadcast_warning.enabled = True
 torch.utils.backcompat.keepdim_warning.enabled = True
 
+def weights_init(m):
+    '''
+    Custom weights initialization called on encoder and decoder.
+    '''
+    if isinstance(m, nn.Conv2d):
+        init.kaiming_normal_(m.weight.data, a=0.01)
+        m.bias.data.zero_()
+    elif isinstance(m, nn.BatchNorm2d):
+        init.normal_(m.weight.data, std=0.015)
+        m.bias.data.zero_()
+
+def adjust_learning_rate(optimizer, epoch):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    lr = args.lr * ((1 - 0.015) ** epoch)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+def half_lr(optimizer):
+    for param_group in optimizer.param_groups:
+        param_group['lr'] /= 2.
 
 import numpy as np
 
@@ -111,7 +132,7 @@ parser.add_argument('--beta2', type=float, default=0.999,
                     help='beta2 for adam, default=0.001')
 
 
-parser.add_argument('--nc', type=int, default=3,
+parser.add_argument('--nc', type=int, default=1,
                     help='number of input channel in data. 3 for rgb, 1 for grayscale')
 parser.set_defaults(test=False)
 parser.set_defaults(learned=False)
@@ -130,6 +151,8 @@ class _Encoder(nn.Module):
         self.out_size = out_size
         self.nz = nz
         self.encoder = nn.Sequential(
+            # Input Channel, Channel, Kernel Size, Stride, Padding
+
             nn.Conv2d(nc, nef, 4, 2, padding=1),
             nn.BatchNorm2d(nef),
             nn.LeakyReLU(0.2, True),
@@ -138,7 +161,6 @@ class _Encoder(nn.Module):
             nn.BatchNorm2d(nef*2),
             nn.LeakyReLU(0.2, True),
 
-
             nn.Conv2d(nef * 2, nef * 4, 4, 2, padding=1),
             nn.BatchNorm2d(nef*4),
             nn.LeakyReLU(0.2, True),            
@@ -146,10 +168,19 @@ class _Encoder(nn.Module):
             nn.Conv2d(nef * 4, nef * 8, 4, 2, padding=1),
             nn.BatchNorm2d(nef*8),
             nn.LeakyReLU(0.2, True),
+
+            # #### VGG 11 Style
+            # nn.Conv2d(nc, nef, 3, stride=1, padding=1),
+            # nn.BatchNorm2d(nef),
+            # nn.LeakyReLU(0.2, True),
+
+
+
             
         )
-        self.mean = nn.Linear(nef * 8 * out_size * out_size, nz)
-        self.logvar = nn.Linear(nef * 8 * out_size * out_size, nz)
+        # 8 because..the depth went from 32 to 32*8
+        self.mean = nn.Linear(nef * 8 * out_size * (out_size/2), nz)
+        self.logvar = nn.Linear(nef * 8 * out_size * (out_size/2), nz)
 
     #for reparametrization trick 
     def sampler(self, mean, logvar):  
@@ -178,6 +209,95 @@ class _Encoder(nn.Module):
         latent_z = self.sampler(mean, logvar)
         return latent_z,mean,logvar
 
+class Tripletnet(nn.Module):
+    def __init__(self, embeddingnet):
+        super(Tripletnet, self).__init__()
+        self.embeddingnet = embeddingnet
+
+    def forward(self, x, y, z):
+        latent_x,mean_x,logvar_x = self.embeddingnet(x)
+        latent_y,mean_y,logvar_y = self.embeddingnet(y)
+        latent_z,mean_z,logvar_z = self.embeddingnet(z)
+        dist_a = F.pairwise_distance(mean_x, mean_y, 2)
+        dist_b = F.pairwise_distance(mean_x, mean_z, 2)
+        return latent_x,mean_x,logvar_x,\
+            latent_y,mean_y,logvar_y,\
+            latent_z,mean_z,logvar_z,\
+            dist_a, dist_b
+
+class _Decoder(nn.Module):
+
+
+    def __init__(self, ngpu,nc,ndf,out_size,nz):
+        super(_Decoder, self).__init__()
+        self.ngpu = ngpu
+        self.nc = nc
+        self.nz  = nz
+        self.ndf = ndf
+        self.out_size = out_size
+
+        self.decoder_dense = nn.Sequential(
+            nn.Linear(nz, ndf * 8 * out_size * out_size),
+            nn.ReLU(True)
+        )
+        self.decoder_conv = nn.Sequential(
+            nn.Upsample(scale_factor=2,mode='nearest'),
+            nn.Conv2d(ndf * 8, ndf * 4, 3, padding=1),
+            nn.BatchNorm2d(ndf * 4, 1e-3),
+            nn.LeakyReLU(0.2, True),
+
+            nn.Upsample(scale_factor=2,mode='nearest'),
+            nn.Conv2d(ndf * 4, ndf * 2, 3, padding=1),
+            nn.BatchNorm2d(ndf * 2, 1e-3),
+            nn.LeakyReLU(0.2, True),
+            
+
+            nn.Upsample(scale_factor=2,mode='nearest'),
+            nn.Conv2d(ndf * 2, ndf, 3, padding=1),
+            nn.BatchNorm2d(ndf, 1e-3),
+            nn.LeakyReLU(0.2, True),
+            
+
+            nn.Upsample(scale_factor=2,mode='nearest'),
+            nn.Conv2d(ndf, nc, 3, padding=1)
+        )
+
+    def forward(self, input):
+        batch_size = input.size(0)
+        if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
+            hidden = nn.parallel.data_parallel(
+                self.decoder_dense, input, range(self.ngpu))
+            hidden = hidden.view(batch_size, self.ndf * 8, self.out_size, self.out_size)
+            output = nn.parallel.data_parallel(
+                self.decoder_conv, input, range(self.ngpu))
+        else:
+            hidden = self.decoder_dense(input).view(
+                batch_size, self.ndf * 8, self.out_size, self.out_size)
+            output = self.decoder_conv(hidden)
+        return output
+
+
+def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
+    # Test
+    for batch_idx, (anchor_out, pos_out, neg_out, anchor_in, pos_in, neg_in) in enumerate(train_loader):
+        print("Load Data")
+
+        # Load into GPU
+        anchor_out_var, pos_out_var, neg_out_var = Variable(anchor_out.cuda()), Variable(pos_out.cuda()), Variable(neg_out.cuda())
+        anchor_in_var, pos_in_var, neg_in_var = Variable(anchor_in.cuda()), Variable(pos_in.cuda()), Variable(neg_in.cuda())
+
+        # Compute Encoder
+        latent_x,mean_x,logvar_x,latent_y,mean_y,logvar_y,latent_z,mean_z,logvar_z,dist_a, dist_b = tnet(anchor_in_var, pos_in_var, neg_in_var)
+        
+        # (Apply Triplet loss) 1 means, dista should be larger than distb
+        target = torch.FloatTensor(dist_a.size()).fill_(1)
+        target = target.cuda()
+        target = Variable(target)
+        loss_triplet = criterion(dist_a, dist_b, target)
+
+
+        
+
 def main():
     global args, best_acc
     global  log_interval
@@ -191,14 +311,13 @@ def main():
     nc = int(args.nc)
     out_size = args.image_size // 16
 
+    # Data Loaders
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     torch.manual_seed(args.seed)
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
-    
     normalize = transforms.Normalize(mean=[0.0, 0.0, 0.0],
                                      std=[1, 1, 1])
-
     out_size = args.image_size // 16  
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
     train_loader = torch.utils.data.DataLoader(
@@ -211,10 +330,47 @@ def main():
                     ])),
         batch_size=args.train_batch_size, shuffle=True, **kwargs)
 
+    # Encoder Network
+    encoder = _Encoder(ngpu,nc,nef,out_size,nz)
+    encoder.apply(weights_init)
+    if args.cuda:
+        encoder = encoder.cuda()
+    tnet = Tripletnet(encoder)
+    if args.cuda:
+        tnet.cuda()
 
-    # Test
-    for batch_idx, (anchor_out, pos_out, neg_out, anchor_in, pos_in, neg_in) in enumerate(train_loader):
-          print("LOAD")
+    # Decoder
+    decoder = _Decoder(ngpu,nc,ndf,out_size,nz)
+    decoder.apply(weights_init)
+
+    # Global Storage
+    global train_loss_metric,train_loss_VAE,train_acc_metric,test_loss_metric,test_loss_VAE,test_acc_metric
+    train_loss_metric = []
+    train_loss_VAE = []
+    train_acc_metric = []
+    test_loss_metric = []
+    test_loss_VAE = []
+    test_acc_metric = []
+
+    # Loss Functions and Params
+    criterion = torch.nn.MarginRankingLoss(margin = args.margin)
+    parameters = list(tnet.parameters()) + list(decoder.parameters())
+    optimizer = optim.Adam(parameters, lr=args.lr, betas=(args.beta1, args.beta2))
+
+    # Half points
+    half_points = [50, 100, 150]
+
+    for epoch in range(args.start_epoch, args.epochs + 1):
+        # Half the LR based on above interval
+        if epoch in half_points: half_lr(optimizer)
+
+        # Print
+        print(epoch)
+        print("LR: " + str(optimizer.param_groups[0]['lr']))
+
+        # Train
+        train(train_loader, tnet, decoder, criterion, optimizer, epoch)
+
 
     print("OK")
 

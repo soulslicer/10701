@@ -16,6 +16,7 @@ def decision(probability):
     return random.random() < probability
 
 def get_rand_int(start, end, exc=-1):
+    #random.seed(time.clock()) ### Disable this if you want same value
     while True:
         y = random.randint(start, end)
         if y == exc: continue
@@ -130,20 +131,26 @@ class TripletImageLoader(torch.utils.data.Dataset):
         self.loader = loader
         self.triplets = data
 
-        self.counter = 220
+        self.counter = 0
 
         # self.angle_mod = 10
         # self.scale_mod = 0.1
         # self.trans_mod = 10
 
-        self.angle_mod = 0
-        self.scale_mod = 0
-        self.trans_mod = 0
+        self.angle_mod = 5
+        self.scale_mod = 0.05
+        self.trans_mod = 5
+
+        self.real_mode_prob = 0
+
+        self.cut_effect_prob = 0
+
+        self.debug_viz = False
 
     def generate_noise_image(self, img, amt = 5):
         # Get a noise profile
         while 1:
-            index = get_rand_int(0, len(self.triplets))
+            index = get_rand_int(0, len(self.triplets)-1)
             triplet = self.triplets[index]      
             if triplet[2] == "full": break
 
@@ -189,9 +196,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         self.counter += 1
 
         # Mode Fake mode vs Real mode
-        real_mode = decision(0.5)
-
-        real_mode = 1
+        real_mode = decision(self.real_mode_prob)
 
         # Real Mode
         if real_mode:
@@ -251,6 +256,8 @@ class TripletImageLoader(torch.utils.data.Dataset):
             anchor_index = get_rand_int(1, MAX_REF)
             pos_index = anchor_index
 
+            print anchor_index
+
             # Get Neg Index - so that it is not same as pos_index
             neg_index = get_rand_int(1, MAX_REF, pos_index)
 
@@ -260,10 +267,10 @@ class TripletImageLoader(torch.utils.data.Dataset):
             neg_image = cv2.imread(self.root + "references/" + get_padded(neg_index) + ".png", 0)
 
             # Add fake noise
-            anchor_image = self.generate_noise_image(anchor_image, get_rand_int(1,7))
+            anchor_image = self.generate_noise_image(anchor_image, get_rand_int(1,5))
 
             # Add Cut effect
-            if decision(0.5):
+            if decision(self.cut_effect_prob):
                 top_cut = random.uniform(0, 0.5)
                 bottom_cut = random.uniform(0, 0.5-top_cut)
                 anchor_image = add_gray(anchor_image, top_cut, bottom_cut)
@@ -292,7 +299,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         img3_inp = self.transform(pil_from_np(neg_image_inp))
 
         # Visualize
-        show_images([img1, img2, img3], [img1_inp, img2_inp, img3_inp])
+        if self.debug_viz: show_images([img1, img2, img3], [img1_inp, img2_inp, img3_inp])
 
         return img1, img2, img3, img1_inp, img2_inp, img3_inp
 
