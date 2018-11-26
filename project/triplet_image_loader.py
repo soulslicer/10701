@@ -145,7 +145,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
         self.cut_effect_prob = 0
 
-        self.debug_viz = True
+        self.debug_viz = False
 
     def generate_noise_image(self, img, amt = 5):
         # Get a noise profile
@@ -174,8 +174,11 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
         # Add noise
         for i in range(0, amt):
-            clean_noise = skimage.util.random_noise(clean_noise, mode='gaussian', seed=None, clip=True)
-            clean_noise = skimage.util.random_noise(clean_noise, mode='Poisson', seed=None, clip=True)
+            gauss_noise = clean_noise.copy()
+            cv2.randn(gauss_noise, 0, 0.07)
+            clean_noise = gauss_noise + clean_noise
+            # clean_noise = skimage.util.random_noise(clean_noise, mode='gaussian', seed=None, clip=True)
+            #clean_noise = skimage.util.random_noise(clean_noise, mode='Poisson', seed=None, clip=True)
             translation_matrix = np.float32([ [1,0,get_rand_int(-2,2,100)], [0,1,get_rand_int(-2,2,100)] ])
             noise_profile_res = cv2.warpAffine(noise_profile_res, translation_matrix, (noise_profile_res.shape[1], noise_profile_res.shape[0]))
             translation_matrix = np.float32([ [1,0,get_rand_int(-2,2,100)], [0,1,get_rand_int(-2,2,100)] ])
@@ -190,6 +193,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         return clean_noise
 
     def __getitem__(self, index):
+        start = time.time()
 
         # Hack
         index = self.counter
@@ -268,6 +272,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
             # Add fake noise
             anchor_image = self.generate_noise_image(anchor_image, get_rand_int(1,5))
+            #anchor_image = neg_image
 
             # Add Cut effect
             if decision(self.cut_effect_prob):
@@ -300,6 +305,9 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
         # Visualize
         if self.debug_viz: show_images([img1, img2, img3], [img1_inp, img2_inp, img3_inp])
+
+        end = time.time()
+        #print(end - start)
 
         return img1, img2, img3, img1_inp, img2_inp, img3_inp
 

@@ -81,7 +81,7 @@ import numpy as np
 
 # that can be set while running the script from the terminal.
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--train_batch_size', type=int, default=64, metavar='N',
+parser.add_argument('--train_batch_size', type=int, default=4, metavar='N',
                     help='input batch size for training (default: 64)')
 parser.add_argument('--batch_size', type=int, default=1, metavar='N',
                     help='input batch size for testing (default: 64)')
@@ -295,7 +295,7 @@ class _Decoder(nn.Module):
             nn.ReLU(True)
         )
         self.decoder_conv = nn.Sequential(
-            # # Input Channel, Channel, Kernel Size, Stride, Padding
+            # Input Channel, Channel, Kernel Size, Stride, Padding
             # nn.Upsample(scale_factor=2,mode='nearest'),
             # nn.Conv2d(ndf * 8, ndf * 4, 3, padding=1),
             # nn.BatchNorm2d(ndf * 4, 1e-3),
@@ -359,12 +359,12 @@ class _Decoder(nn.Module):
         if isinstance(input.data, torch.cuda.FloatTensor) and self.ngpu > 1:
             hidden = nn.parallel.data_parallel(
                 self.decoder_dense, input, range(self.ngpu))
-            hidden = hidden.view(batch_size, self.ndf * 8, self.out_size, self.out_size)
+            hidden = hidden.view(batch_size, self.ndf * 8, self.out_size, self.out_size/2)
             output = nn.parallel.data_parallel(
                 self.decoder_conv, input, range(self.ngpu))
         else:
             hidden = self.decoder_dense(input).view(
-                batch_size, self.ndf * 8, self.out_size, self.out_size)
+                batch_size, self.ndf * 8, self.out_size, self.out_size/2)
             output = self.decoder_conv(hidden)
         return output
 
@@ -380,6 +380,7 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
     decoder.train()
     for batch_idx, (anchor_out, pos_out, neg_out, anchor_in, pos_in, neg_in) in enumerate(train_loader):
         #print("Load Data")
+        #continue
 
         # Load into GPU
         anchor_out_var, pos_out_var, neg_out_var = Variable(anchor_out.cuda()), Variable(pos_out.cuda()), Variable(neg_out.cuda())
@@ -388,8 +389,15 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
         # Compute Encoder
         latent_x,mean_x,logvar_x,latent_y,mean_y,logvar_y,latent_z,mean_z,logvar_z,dist_a, dist_b = tnet(anchor_in_var, pos_in_var, neg_in_var)
         
-        # Compute Decoder
         reconstructed_x = decoder(latent_x)
+        reconstructed_y = decoder(latent_y)
+        reconstructed_z = decoder(latent_z)
+
+        # min(reconstructed_x - reconstructed_y)
+        # min(reconstructed_y - pos_out_var)
+        # min(reconstructed_z - neg_in_var)
+        #print(reconstructed_x.shape)
+
 
         # (Apply Triplet loss) 1 means, dista should be larger than distb
         target = torch.FloatTensor(dist_a.size()).fill_(1)
@@ -402,7 +410,7 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
         loss = args.triplet_loss*loss_triplet + args.embed_loss*loss_embedd 
         # measure accuracy and record loss
         acc = accuracy(dist_a, dist_b)
-        print(acc)
+        #print(acc)
         losses_metric.update(loss_triplet.item(), anchor_in.size(0))
         #losses_VAE.update(loss_vae.data[0], data1.size(0))
         accs.update(acc, anchor_in.size(0))
@@ -429,6 +437,16 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
             train_loss_VAE.append(0)
             train_acc_metric.append(accs.val)
         
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    """Saves checkpoint to disk"""
+    directory = "runs/%s/"%(args.name)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    filename = directory + filename
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, 'runs/%s/'%(args.name) + 'model_best.pth.tar')
+
 
 def main():
     global args, best_acc
@@ -474,6 +492,7 @@ def main():
     # Decoder
     decoder = _Decoder(ngpu,nc,ndf,out_size,nz)
     decoder.apply(weights_init)
+    decoder.cuda()
 
     # Global Storage
     global train_loss_metric,train_loss_VAE,train_acc_metric,test_loss_metric,test_loss_VAE,test_acc_metric
@@ -483,6 +502,28 @@ def main():
     test_loss_metric = []
     test_loss_VAE = []
     test_acc_metric = []
+
+    # Resume
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            args.start_epoch = checkpoint['epoch']
+            best_prec1 = checkpoint['best_prec1']
+            train_loss_metric = checkpoint['train_loss_metric']
+            train_loss_VAE = checkpoint['train_loss_VAE']
+            train_acc_metric = checkpoint['train_acc_metric']
+            test_loss_metric = checkpoint['test_loss_metric']
+            test_loss_VAE = checkpoint['test_loss_VAE']
+            test_acc_metric = checkpoint['test_acc_metric']
+
+            tnet.load_state_dict(checkpoint['state_dict'])
+            encoder.load_state_dict(checkpoint['encoder_state_dict'])
+            decoder.load_state_dict(checkpoint['decoder_state_dict'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                    .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
 
     # Loss Functions and Params
     criterion = torch.nn.MarginRankingLoss(margin = args.margin)
@@ -503,6 +544,21 @@ def main():
         # Train
         train(train_loader, tnet, decoder, criterion, optimizer, epoch)
 
+        # Saving
+        if epoch % 100:
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': tnet.state_dict(),
+                'encoder_state_dict': encoder.state_dict(),
+                'decoder_state_dict': decoder.state_dict(),
+                'best_prec1': best_acc,
+                'train_loss_metric':train_loss_metric,
+                'train_loss_VAE':train_loss_VAE,
+                'train_acc_metric':train_acc_metric,
+                'test_loss_metric':test_loss_metric,
+                'test_loss_VAE':test_loss_VAE,
+                'test_acc_metric':test_acc_metric,
+            }, False)
 
     print("OK")
 
