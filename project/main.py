@@ -49,6 +49,28 @@ def half_lr(optimizer):
     for param_group in optimizer.param_groups:
         param_group['lr'] /= 2.
 
+def accuracy(dista, distb):
+    margin = 0
+    pred = (dista - distb - margin).cpu().data
+    return (1.0* int((pred > 0).sum().item()))/ (1.0* dista.size()[0])
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
 import numpy as np
 
 ################################################
@@ -59,7 +81,7 @@ import numpy as np
 
 # that can be set while running the script from the terminal.
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-parser.add_argument('--train_batch_size', type=int, default=4, metavar='N',
+parser.add_argument('--train_batch_size', type=int, default=64, metavar='N',
                     help='input batch size for training (default: 64)')
 parser.add_argument('--batch_size', type=int, default=1, metavar='N',
                     help='input batch size for testing (default: 64)')
@@ -152,7 +174,6 @@ class _Encoder(nn.Module):
         self.nz = nz
         self.encoder = nn.Sequential(
             # Input Channel, Channel, Kernel Size, Stride, Padding
-
             nn.Conv2d(nc, nef, 4, 2, padding=1),
             nn.BatchNorm2d(nef),
             nn.LeakyReLU(0.2, True),
@@ -173,8 +194,28 @@ class _Encoder(nn.Module):
             # nn.Conv2d(nc, nef, 3, stride=1, padding=1),
             # nn.BatchNorm2d(nef),
             # nn.LeakyReLU(0.2, True),
+            # nn.MaxPool2d(2, 2),
 
+            # nn.Conv2d(nef, nef * 2, 3, stride=1, padding=1),
+            # nn.BatchNorm2d(nef*2),
+            # nn.LeakyReLU(0.2, True),
+            # nn.MaxPool2d(2, 2),
 
+            # nn.Conv2d(nef * 2, nef * 4, 3, stride=1, padding=1),
+            # nn.BatchNorm2d(nef*4),
+            # nn.LeakyReLU(0.2, True),
+            # nn.Conv2d(nef * 4, nef * 4, 3, stride=1, padding=1),
+            # nn.BatchNorm2d(nef*4),
+            # nn.LeakyReLU(0.2, True),
+            # nn.MaxPool2d(2, 2),
+
+            # nn.Conv2d(nef * 4, nef * 8, 3, stride=1, padding=1),
+            # nn.BatchNorm2d(nef*8),
+            # nn.LeakyReLU(0.2, True),
+            # nn.Conv2d(nef * 8, nef * 8, 3, stride=1, padding=1),
+            # nn.BatchNorm2d(nef*8),
+            # nn.LeakyReLU(0.2, True),
+            # nn.MaxPool2d(2, 2),
 
             
         )
@@ -278,9 +319,16 @@ class _Decoder(nn.Module):
 
 
 def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
-    # Test
+    losses_metric = AverageMeter()
+    losses_VAE = AverageMeter()
+    accs = AverageMeter()
+    emb_norms = AverageMeter()
+
+    # Train
+    tnet.train()
+    decoder.train()
     for batch_idx, (anchor_out, pos_out, neg_out, anchor_in, pos_in, neg_in) in enumerate(train_loader):
-        print("Load Data")
+        #print("Load Data")
 
         # Load into GPU
         anchor_out_var, pos_out_var, neg_out_var = Variable(anchor_out.cuda()), Variable(pos_out.cuda()), Variable(neg_out.cuda())
@@ -294,8 +342,38 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
         target = target.cuda()
         target = Variable(target)
         loss_triplet = criterion(dist_a, dist_b, target)
+        loss_embedd = mean_x.norm(2) + mean_y.norm(2) + mean_z.norm(2)
 
+        # Loss Combine
+        loss = args.triplet_loss*loss_triplet + args.embed_loss*loss_embedd 
+        # measure accuracy and record loss
+        acc = accuracy(dist_a, dist_b)
+        print(acc)
+        losses_metric.update(loss_triplet.item(), anchor_in.size(0))
+        #losses_VAE.update(loss_vae.data[0], data1.size(0))
+        accs.update(acc, anchor_in.size(0))
+        emb_norms.update(loss_embedd.item()/3, anchor_in.size(0))
 
+        # compute gradient and do optimizer step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if batch_idx % log_interval == 0:
+            print('Train Epoch: {} [{}/{}]\t'
+                  'VAE Loss: {:.4f} ({:.4f}) \t'
+                  'Metric Loss: {:.4f} ({:.4f}) \t'
+                  'Metric Acc: {:.2f}% ({:.2f}%) \t'
+                  'Emb_Norm: {:.2f} ({:.2f})'.format(
+                epoch, batch_idx * len(anchor_in), len(train_loader.dataset),
+                #losses_VAE.val, losses_VAE.avg,
+                0,0,
+                losses_metric.val, losses_metric.avg, 
+                100. * accs.val, 100. * accs.avg, emb_norms.val, emb_norms.avg))
+
+            train_loss_metric.append(losses_metric.val)
+            #train_loss_VAE.append(losses_VAE.val)
+            train_loss_VAE.append(0)
+            train_acc_metric.append(accs.val)
         
 
 def main():
@@ -362,11 +440,11 @@ def main():
 
     for epoch in range(args.start_epoch, args.epochs + 1):
         # Half the LR based on above interval
-        if epoch in half_points: half_lr(optimizer)
-
-        # Print
-        print(epoch)
-        print("LR: " + str(optimizer.param_groups[0]['lr']))
+        if epoch in half_points: 
+            half_lr(optimizer)
+            # Print
+            print(epoch)
+            print("LR: " + str(optimizer.param_groups[0]['lr']))
 
         # Train
         train(train_loader, tnet, decoder, criterion, optimizer, epoch)

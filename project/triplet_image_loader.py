@@ -256,7 +256,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
             anchor_index = get_rand_int(1, MAX_REF)
             pos_index = anchor_index
 
-            print anchor_index
+            #print anchor_index
 
             # Get Neg Index - so that it is not same as pos_index
             neg_index = get_rand_int(1, MAX_REF, pos_index)
@@ -278,7 +278,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
             # Flip Image
             if decision(0.5):
-                anchor_image = cv2.flip(anchor_image, 1 )
+                anchor_image = cv2.flip(anchor_image, 1)
                 pos_image = cv2.flip(pos_image, 1 )
             if decision(0.5):
                 neg_image = cv2.flip(neg_image, 1 )
