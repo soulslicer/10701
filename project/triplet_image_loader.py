@@ -145,7 +145,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
         self.cut_effect_prob = 0
 
-        self.debug_viz = False
+        self.debug_viz = True
 
     def generate_noise_image(self, img, amt = 5):
         # Get a noise profile

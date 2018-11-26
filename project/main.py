@@ -139,7 +139,7 @@ parser.add_argument('--nef', type=int, default=32,
                     help='number of output channels for the first encoder layer, default=32')
 
 #same as dim_embed
-parser.add_argument('--nz', type=int, default=64,
+parser.add_argument('--nz', type=int, default=128,
                     help='size of the latent vector z, default=64')
 parser.add_argument('--ngpu', type=int, default=1,
                     help='number of GPUs to use')
@@ -174,48 +174,61 @@ class _Encoder(nn.Module):
         self.nz = nz
         self.encoder = nn.Sequential(
             # Input Channel, Channel, Kernel Size, Stride, Padding
-            nn.Conv2d(nc, nef, 4, 2, padding=1),
-            nn.BatchNorm2d(nef),
-            nn.LeakyReLU(0.2, True),
-
-            nn.Conv2d(nef, nef * 2, 4, 2, padding=1),
-            nn.BatchNorm2d(nef*2),
-            nn.LeakyReLU(0.2, True),
-
-            nn.Conv2d(nef * 2, nef * 4, 4, 2, padding=1),
-            nn.BatchNorm2d(nef*4),
-            nn.LeakyReLU(0.2, True),            
-
-            nn.Conv2d(nef * 4, nef * 8, 4, 2, padding=1),
-            nn.BatchNorm2d(nef*8),
-            nn.LeakyReLU(0.2, True),
-
-            # #### VGG 11 Style
-            # nn.Conv2d(nc, nef, 3, stride=1, padding=1),
+            # nn.Conv2d(nc, nef, 4, 2, padding=1),
             # nn.BatchNorm2d(nef),
             # nn.LeakyReLU(0.2, True),
-            # nn.MaxPool2d(2, 2),
 
-            # nn.Conv2d(nef, nef * 2, 3, stride=1, padding=1),
+            # nn.Conv2d(nef, nef * 2, 4, 2, padding=1),
             # nn.BatchNorm2d(nef*2),
             # nn.LeakyReLU(0.2, True),
-            # nn.MaxPool2d(2, 2),
 
-            # nn.Conv2d(nef * 2, nef * 4, 3, stride=1, padding=1),
+            # nn.Conv2d(nef * 2, nef * 4, 4, 2, padding=1),
             # nn.BatchNorm2d(nef*4),
-            # nn.LeakyReLU(0.2, True),
-            # nn.Conv2d(nef * 4, nef * 4, 3, stride=1, padding=1),
-            # nn.BatchNorm2d(nef*4),
-            # nn.LeakyReLU(0.2, True),
-            # nn.MaxPool2d(2, 2),
+            # nn.LeakyReLU(0.2, True),            
 
-            # nn.Conv2d(nef * 4, nef * 8, 3, stride=1, padding=1),
+            # nn.Conv2d(nef * 4, nef * 8, 4, 2, padding=1),
             # nn.BatchNorm2d(nef*8),
             # nn.LeakyReLU(0.2, True),
-            # nn.Conv2d(nef * 8, nef * 8, 3, stride=1, padding=1),
-            # nn.BatchNorm2d(nef*8),
-            # nn.LeakyReLU(0.2, True),
-            # nn.MaxPool2d(2, 2),
+
+            #### VGG 11 Style
+
+            # 3 -> 32
+            nn.Conv2d(nc, nef, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef),
+            nn.LeakyReLU(0.2, True),
+            nn.MaxPool2d(2, 2),
+
+            # 32 -> 64
+            nn.Conv2d(nef, nef * 2, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*2),
+            nn.LeakyReLU(0.2, True),
+            nn.MaxPool2d(2, 2),
+
+            # 64 -> 128
+            nn.Conv2d(nef * 2, nef * 4, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*4),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nef * 4, nef * 4, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*4),
+            nn.LeakyReLU(0.2, True),
+            nn.MaxPool2d(2, 2),
+
+            # 128 -> 256
+            nn.Conv2d(nef * 4, nef * 8, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*8),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nef * 8, nef * 8, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*8),
+            nn.LeakyReLU(0.2, True),
+            nn.MaxPool2d(2, 2),
+
+            # 256 -> 256 twice
+            nn.Conv2d(nef * 8, nef * 8, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*8),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nef * 8, nef * 8, 3, stride=1, padding=1),
+            nn.BatchNorm2d(nef*8),
+            nn.LeakyReLU(0.2, True),
 
             
         )
@@ -278,29 +291,67 @@ class _Decoder(nn.Module):
         self.out_size = out_size
 
         self.decoder_dense = nn.Sequential(
-            nn.Linear(nz, ndf * 8 * out_size * out_size),
+            nn.Linear(nz, ndf * 8 * out_size * out_size/2),
             nn.ReLU(True)
         )
         self.decoder_conv = nn.Sequential(
-            nn.Upsample(scale_factor=2,mode='nearest'),
-            nn.Conv2d(ndf * 8, ndf * 4, 3, padding=1),
-            nn.BatchNorm2d(ndf * 4, 1e-3),
-            nn.LeakyReLU(0.2, True),
+            # # Input Channel, Channel, Kernel Size, Stride, Padding
+            # nn.Upsample(scale_factor=2,mode='nearest'),
+            # nn.Conv2d(ndf * 8, ndf * 4, 3, padding=1),
+            # nn.BatchNorm2d(ndf * 4, 1e-3),
+            # nn.LeakyReLU(0.2, True),
 
-            nn.Upsample(scale_factor=2,mode='nearest'),
-            nn.Conv2d(ndf * 4, ndf * 2, 3, padding=1),
-            nn.BatchNorm2d(ndf * 2, 1e-3),
-            nn.LeakyReLU(0.2, True),
+            # nn.Upsample(scale_factor=2,mode='nearest'),
+            # nn.Conv2d(ndf * 4, ndf * 2, 3, padding=1),
+            # nn.BatchNorm2d(ndf * 2, 1e-3),
+            # nn.LeakyReLU(0.2, True),
             
 
+            # nn.Upsample(scale_factor=2,mode='nearest'),
+            # nn.Conv2d(ndf * 2, ndf, 3, padding=1),
+            # nn.BatchNorm2d(ndf, 1e-3),
+            # nn.LeakyReLU(0.2, True),
+            
+            # nn.Upsample(scale_factor=2,mode='nearest'),
+            # nn.Conv2d(ndf, nc, 3, padding=1)
+
+            # VGG11
+            nn.Conv2d(ndf * 8, ndf * 8, 3, stride=1, padding=1),
+            nn.BatchNorm2d(ndf*8, 1e-3),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(ndf * 8, ndf * 8, 3, stride=1, padding=1),
+            nn.BatchNorm2d(ndf*8, 1e-3),
+            nn.LeakyReLU(0.2, True),
+
+            # 256 -> 128
             nn.Upsample(scale_factor=2,mode='nearest'),
-            nn.Conv2d(ndf * 2, ndf, 3, padding=1),
+            nn.Conv2d(ndf * 8, ndf * 4, 3, stride=1, padding=1),
+            nn.BatchNorm2d(ndf*4, 1e-3),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(ndf * 4, ndf * 4, 3, stride=1, padding=1),
+            nn.BatchNorm2d(ndf*4, 1e-3),
+            nn.LeakyReLU(0.2, True),
+            
+            # 128 -> 64
+            nn.Upsample(scale_factor=2,mode='nearest'),
+            nn.Conv2d(ndf * 4, ndf * 2, 3, stride=1, padding=1),
+            nn.BatchNorm2d(ndf*2, 1e-3),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(ndf * 2, ndf * 2, 3, stride=1, padding=1),
+            nn.BatchNorm2d(ndf*2, 1e-3),
+            nn.LeakyReLU(0.2, True),
+
+            # 64 -> 32
+            nn.Upsample(scale_factor=2,mode='nearest'),
+            nn.Conv2d(ndf * 2, ndf, 3, stride=1, padding=1),
             nn.BatchNorm2d(ndf, 1e-3),
             nn.LeakyReLU(0.2, True),
-            
 
+            # 32 -> 32
             nn.Upsample(scale_factor=2,mode='nearest'),
-            nn.Conv2d(ndf, nc, 3, padding=1)
+            nn.Conv2d(ndf, nc, 3, stride=1, padding=1),
+
+
         )
 
     def forward(self, input):
@@ -337,6 +388,9 @@ def train(train_loader, tnet, decoder, criterion, optimizer, epoch):
         # Compute Encoder
         latent_x,mean_x,logvar_x,latent_y,mean_y,logvar_y,latent_z,mean_z,logvar_z,dist_a, dist_b = tnet(anchor_in_var, pos_in_var, neg_in_var)
         
+        # Compute Decoder
+        reconstructed_x = decoder(latent_x)
+
         # (Apply Triplet loss) 1 means, dista should be larger than distb
         target = torch.FloatTensor(dist_a.size()).fill_(1)
         target = target.cuda()
