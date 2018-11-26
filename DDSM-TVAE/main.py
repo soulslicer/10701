@@ -614,15 +614,6 @@ def main():
     test_loss_VAE = []
     test_acc_metric = []
 
-    from torchviz import make_dot
-
-
-    inputs = torch.randn(1,3,224,224)
-    y = encoder(Variable(inputs))
-    gg = make_dot(y)
-
-    stop
-
 
     # optionally resume from a checkpoint
     if args.resume:
