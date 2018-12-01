@@ -358,6 +358,14 @@ def loss_function(recon_x,x,mu,logvar,descriptor):
     FPL = fpl_criterion(recon_features, target_feature)
     return KLD+0.5*FPL
 
+def loss_function(recon_x,x,mu,logvar):
+    KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+    KLD = torch.sum(KLD_element).mul_(-0.5)
+    target_feature = descriptor(x)
+    recon_features = descriptor(recon_x)
+    FPL = fpl_criterion(recon_features, target_feature)
+    return KLD+0.5*FPL
+
 ########################################################################
 
 

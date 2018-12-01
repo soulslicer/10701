@@ -43,7 +43,7 @@ def load_csv(file, range_wanted):
         string = string.rstrip()
         arr = string.split(",")
         arr = [int(arr[0]), int(arr[1]), arr[2]]
-        if arr[0] < range_wanted[0] or arr[0] > range_wanted[1]: continue 
+        #if arr[0] < range_wanted[0] or arr[0] > range_wanted[1]: continue 
         arrs.append(arr)
     f.close()
     return arrs
@@ -116,7 +116,7 @@ def show_images(img_arr, img_arr2, name="data"):
 
 
 class TripletImageLoader(torch.utils.data.Dataset):
-    def __init__(self, root, range_wanted, transform=None, loader=default_image_loader):
+    def __init__(self, root, filename, range_wanted, transform=None, loader=default_image_loader):
         """ filenames_filename: A text file with each line containing the path to an image e.g.,
                 images/class1/sample.jpg
             triplets_file_name: A text file with each line containing three integers, 
@@ -125,7 +125,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
                 similar to image c than it is to image b, e.g., 
                 0 2017 42 """
         self.root = root
-        data = load_csv(self.root + 'label_table.csv', range_wanted)
+        data = load_csv(self.root + filename, range_wanted)
 
         self.transform = transform
         self.loader = loader
@@ -140,12 +140,15 @@ class TripletImageLoader(torch.utils.data.Dataset):
         self.angle_mod = 5
         self.scale_mod = 0.05
         self.trans_mod = 5
+        self.flip_mod = 0.5
 
-        self.real_mode_prob = 0
+        self.real_mode_prob = 0.1
 
         self.cut_effect_prob = 0
 
         self.debug_viz = False
+
+        self.load_ref = False
 
     def generate_noise_image(self, img, amt = 5):
         # Get a noise profile
@@ -197,13 +200,13 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
         # Hack
         index = self.counter
-        self.counter += 1
 
         # Mode Fake mode vs Real mode
         real_mode = decision(self.real_mode_prob)
 
         # Real Mode
         if real_mode:
+            self.counter += 1
 
             # Get Anchor and Pos Index
             anchor_index = self.triplets[index][0]
@@ -213,7 +216,8 @@ class TripletImageLoader(torch.utils.data.Dataset):
             neg_index = get_rand_int(1, MAX_REF, pos_index)
 
             # Load files
-            anchor_image = cv2.imread(self.root + "tracks_cropped/" + get_padded(anchor_index) + ".jpg", 0)
+            if self.load_ref: anchor_image = cv2.imread(self.root + "references/" + get_padded(anchor_index) + ".png", 0)
+            else: anchor_image = cv2.imread(self.root + "tracks_cropped/" + get_padded(anchor_index) + ".jpg", 0)
             pos_image = cv2.imread(self.root + "references/" + get_padded(pos_index) + ".png", 0)
             neg_image = cv2.imread(self.root + "references/" + get_padded(neg_index) + ".png", 0)
 
@@ -239,10 +243,10 @@ class TripletImageLoader(torch.utils.data.Dataset):
                 pos_image[0:pos_image.shape[0]/2,:] = 128
 
             # Flip Image
-            if decision(0.5):
+            if decision(self.flip_mod):
                 anchor_image = cv2.flip(anchor_image, 1 )
                 pos_image = cv2.flip(pos_image, 1 )
-            if decision(0.5):
+            if decision(self.flip_mod):
                 neg_image = cv2.flip(neg_image, 1 )
 
             # Input Images have Aug
@@ -282,10 +286,10 @@ class TripletImageLoader(torch.utils.data.Dataset):
                 pos_image = add_gray(pos_image, top_cut, bottom_cut)
 
             # Flip Image
-            if decision(0.5):
+            if decision(self.flip_mod):
                 anchor_image = cv2.flip(anchor_image, 1)
                 pos_image = cv2.flip(pos_image, 1 )
-            if decision(0.5):
+            if decision(self.flip_mod):
                 neg_image = cv2.flip(neg_image, 1 )
 
             # Input Images have Aug
@@ -309,7 +313,7 @@ class TripletImageLoader(torch.utils.data.Dataset):
         end = time.time()
         #print(end - start)
 
-        return img1, img2, img3, img1_inp, img2_inp, img3_inp
+        return img1, img2, img3, img1_inp, img2_inp, img3_inp, pos_index
 
 
         # print index
@@ -335,20 +339,74 @@ class TripletImageLoader(torch.utils.data.Dataset):
 
         # Mechanism for blocking bounding box - top, middle, bottom
 
-        if os.path.exists(os.path.join(self.root, self.base_path, self.filenamelist[int(path1)])) and os.path.exists(os.path.join(self.root, self.base_path, self.filenamelist[int(path1)])) and os.path.exists(os.path.join(self.root, self.base_path, self.filenamelist[int(path1)])):
-            img1 = self.loader(os.path.join(self.root, self.base_path, self.filenamelist[int(path1)]))
-            img2 = self.loader(os.path.join(self.root, self.base_path, self.filenamelist[int(path2)]))
-            img3 = self.loader(os.path.join(self.root, self.base_path, self.filenamelist[int(path3)]))
-            if self.transform is not None:
-                img1 = self.transform(img1)
-                img2 = self.transform(img2)
-                img3 = self.transform(img3)
-
-            print img1.shape
-
-            return img1, img2, img3, c
-        else:
-            return None
 
     def __len__(self):
         return len(self.triplets)
+
+print(__name__)
+if __name__ == '__main__':
+    
+    # WRITE A LOADER TO GET VALIDATION IMAGES?
+
+    # TRAIN AGAIN ON REAL DATA
+
+    val_loader =  TripletImageLoader('data/FID-300/', 'val.txt', [0,250],
+                transform=transforms.Compose([
+                    transforms.Resize((224,112)),
+                    transforms.CenterCrop((224,112)),
+                    transforms.ToTensor(),
+            ]))
+    val_loader.real_mode_prob = 1
+    val_loader.angle_mod = 0
+    val_loader.scale_mod = 0
+    val_loader.trans_mod = 0
+    val_loader.flip_mod = 0
+
+    val_loader.debug_viz = False
+    i=0
+    for data in val_loader:
+        i+=1
+        print(i)
+        pass
+
+    i=0
+    for data in val_loader:
+        i+=1
+        print(i)
+        pass
+
+
+    # ref_loader =  TripletImageLoader('data/FID-300/', 'ref.txt', [0,2000],
+    #             transform=transforms.Compose([
+    #                 transforms.Resize((224,112)),
+    #                 transforms.CenterCrop((224,112)),
+    #                 transforms.ToTensor(),
+    #         ]))
+    # ref_loader.real_mode_prob = 1
+    # ref_loader.angle_mod = 0
+    # ref_loader.scale_mod = 0
+    # ref_loader.trans_mod = 0
+    # ref_loader.flip_mod = 0
+    # ref_loader.load_ref = True
+
+    # ref_loader.debug_viz = True
+    # for data in ref_loader:
+    #     pass
+
+    # real_loader =  TripletImageLoader('data/FID-300/', 'ref.txt', [0,2000],
+    #             transform=transforms.Compose([
+    #                 transforms.Resize((224,112)),
+    #                 transforms.CenterCrop((224,112)),
+    #                 transforms.ToTensor(),
+    #         ]))
+    # ref_loader.real_mode_prob = 0.1
+    # ref_loader.angle_mod = 0
+    # ref_loader.scale_mod = 0
+    # ref_loader.trans_mod = 0
+    # ref_loader.flip_mod = 0
+    # ref_loader.load_ref = True
+
+    # ref_loader.debug_viz = True
+    # for data in ref_loader:
+    #     print len(data)
+    #     pass
